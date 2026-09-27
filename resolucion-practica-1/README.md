@@ -33,6 +33,11 @@ Estamos trabajando para una plataforma ficticia de comercio electrónico que nec
 - **Veracidad:** sería grave no detectar operaciones fraudulentas por lo cual necesitamos data certera. Tambien sería grave identificar erroneamente una operación legal como fraudulenta
 - **Valor:** mitigar perdidas economicas por fraude.
 
-## Desafio
 
-Pending...
+## Reflexión final desafío
+
+Detectar una evolución de esquema es darse cuenta de que algo cambió. En este caso fue ver que apareció la columna app_version y un tipo de evento nuevo, refund.
+
+Aceptarla técnicamente es lo que hicimos con bronze_events_v2. Es decir logramos que el pipeline absorba el cambio sin romperse. En Bronze guardamos todo lo que llega y todavia no me pregunto si nos va a servir o no.
+
+ Un cambio puede ser técnicamente aceptable y aun así no ser válido para el negocio. Por ejemplo, este evento de tipo refund, es un evento? no sería una transacción que reversa una compra? Tal vez nos sirve para entender el ingreso efectivo de dinero por ventas pero no para analizar fraude. Esa decisión se debería aplicar en Silver o Gold.
