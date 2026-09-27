@@ -1,39 +1,38 @@
 # Resolución Práctica 1 — Ingesta y capa Bronze
 
 - **Nombre:** Tomás Fernández Addoumie
-- **`student_id`:** `tfernandezaddoumie`
-- **Namespace:** `workspace.bigdata_tfernandezaddoumie` (escala `small`)
+- **Namespace:** workspace.bigdata_tfernandezaddoumie
+- **Volumen:**    /Volumes/workspace/bigdata_tfernandezaddoumie/landing
+- **Filas:**   {'customers': 100, 'products': 30, 'transactions': 1000, 'events': 3000}
 
-## Resultados
+## 1) Formatos
 
-| Tabla Bronze | Filas |
-|---|---:|
-| `bronze_customers` | 5.000 |
-| `bronze_products` | 500 |
-| `bronze_transactions` | 50.011 |
-| `bronze_events` | 200.000 |
+** CSV: transactions y customers
+El csv no guarda tipos de dato: trae a todos como string. Cuando activamos el inferschema = true, spark recorre los datos para inferir el tipo y cambia cofrectamente el tipo de dato de los que son integer y timestamp, pero vemos que amount sigue como string. Con el preview de transactions.csv se ve que hay valores N/A. Esto es inestable porque si en el proximo lote no viene ningun N/A y usamos el iferrschema, lo va a detectar numérico. 
 
-Diagnóstico de calidad sobre `bronze_transactions`: **50.011 filas**, **50.000 `transaction_id` distintos** (11 duplicados) y **52 importes no convertibles** a número (`"N/A"`). En Bronze se conservan tal como llegaron; se corrigen en Silver.
+Cuando lo ejecuto con inferschema veo 8s de demora en comparacion a 7s, es decir es poco. Pero ahora estamos trabajando con pocos datos, entiendo que en un entorno productivo real esto sí es significativo. 
 
-## Observaciones sobre formatos
+** JSON: events
+El JSON conserva estructuras anidadas, lo vemos en context que es un struct con platform y session_id (semiestructurado). Aca veo que event_ts queda como string y no como timestamp (porque el formato JSON no lo va a permitir nunca).
 
-**1. CSV y JSON: el esquema se pierde o se adivina.**
-El CSV no guarda tipos: leído sin opciones, todas las columnas de `transactions` son `string`. Con `inferSchema=true` Spark hace una pasada extra sobre los datos y detecta `integer` y `timestamp`, pero `amount` sigue como `string` porque alcanzan unos pocos `"N/A"` para invalidar el tipo numérico. Es una decisión inestable: un lote sin `N/A` produciría otro esquema. El JSON conserva estructuras anidadas (`context` es un `struct` con `platform` y `session_id`) e infiere números como `long`, pero `event_ts` queda como `string` porque JSON no tiene tipo fecha.
+** Parquet: products
+El archivo products se lee con los tipos de dato correctos sin inferir nada. 
+Cuando se le pide al final del notebook hacer un select * group by payment_channel, el explain muestra que solo lee esta columna. Es una ventaja de los archivos parquet que con columnares, si fuese csv por ejemplo no podria. 
 
-**2. Parquet: el esquema viaja con el archivo y el almacenamiento es columnar.**
-`products` se lee con tipos correctos (`long`, `decimal(12,2)`) sin inferir nada. Además, al ser columnar, el `EXPLAIN` de un `GROUP BY payment_channel` muestra `ReadSchema: struct<payment_channel:string>`: Spark lee solo la columna que necesita, no la fila completa.
+**3. Delta: 
+Cuando pasamos los 4 archivos a delta vemos algunas cosas, por ejemplo en transactions vemos la descripcion con DESCRIBE_DETAIL y los logs con DESCRIBE_HISTORY.
 
-**3. Delta: Parquet más un log de transacciones.**
-`DESCRIBE DETAIL` muestra formato `delta`, 1 archivo de ~687 KB comprimido con zstd y features como *deletion vectors*. `DESCRIBE HISTORY` registra la versión 0 (`CREATE OR REPLACE TABLE AS SELECT`) con usuario, notebook, fecha y métricas (`numOutputRows = 50011`). Un directorio Parquet no tiene historial, versiones ni garantías transaccionales; Delta habilita auditoría, Time Travel y operaciones como `MERGE`.
 
 ## Las cinco V en este caso
 
-- **Volumen:** 50.000 transacciones y 200.000 eventos en escala `small`, y un millón de eventos en `demo`. Una plataforma real genera ese volumen en horas, lo que justifica un motor distribuido como Spark.
-- **Velocidad:** los eventos de navegación (`view`, `search`, `add_to_cart`, `checkout`) se generan de forma continua, y el fraude debe detectarse mientras ocurre, no al día siguiente. `_ingested_at` permite medir la latencia de ingesta.
-- **Variedad:** tres formatos (CSV, JSON y Parquet), con datos estructurados y semiestructurados (el `struct` anidado `context` en eventos).
-- **Veracidad:** importes `"N/A"`, transacciones duplicadas, tipos perdidos en el CSV y, en el desafío, un esquema que cambia sin aviso. Por eso Bronze agrega `_source`, `_source_file` y `_ingested_at`: para poder rastrear cada dato hasta su origen.
-- **Valor:** el objetivo es detectar operaciones fraudulentas (`is_fraud`) para reducir pérdidas. El valor aparece recién en Silver/Gold y en el modelo de la clase 4, pero depende de una ingesta trazable.
+Estamos trabajando para una plataforma ficticia de comercio electrónico que necesita detectar operaciones potencialmente fraudulentas. Entonces:
 
-## Reflexión final del desafío
+- **Volumen:** se genera una transacción por cada operación que ocurra en el ecommerce. Por ejemplo imaginemos el marketplace de mercadolibre, son miles de compras por hora.
+- **Velocidad:** si el objetivo es detectar operaciones de fraude, la velocidad es clave para actuar al instante. 
+- **Variedad:** lo vemos como ejemplo en los tres formatos (CSV, JSON y Parquet), con datos estructurados y semiestructurados
+- **Veracidad:** sería grave no detectar operaciones fraudulentas por lo cual necesitamos data certera. Tambien sería grave identificar erroneamente una operación legal como fraudulenta
+- **Valor:** mitigar perdidas economicas por fraude.
 
-_Pendiente: completar después de resolver `02_desafio.ipynb` (máximo 150 palabras)._
+## Desafio
+
+Pending...
