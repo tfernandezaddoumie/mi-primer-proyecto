@@ -35,7 +35,11 @@ WHERE source_batch_id = 'batch_002';
 
 ## 4. `COPY INTO` y `MERGE`: problemas diferentes
 
-_Pendiente._
+COPY INTO y MERGE resuelven problemas diferentes porque el primero trabaja a nivel archivo y el segundo lo hace a nivel registro. 
+
+En la ingesta de datos en Bronze, usamos COPY INTO para preguntarnos: “¿qué archivos de la carpeta todavía no cargué?”. Queda guardado en el log de la tabla Delta qué archivos ya procesó y los saltea en las siguientes corridas, así que reejecutar la ingesta no duplica datos en Bronze (en la segunda ejecución insertó 0 filas).
+
+Por otro lado el MERGE lo usamos en Silver en el típico UPSERT y se pregunta “¿esta transacción es nueva, es una corrección de una que ya tengo, o no cambió nada?”. Usando transaction_id como clave, inserta las transacciones nuevas y actualiza las existentes solo si llega una versión más reciente.
 
 ## 5. Grano de las tablas Gold
 
@@ -87,143 +91,216 @@ De todas formas hay que tener en cuenta el tamaño de los lotes nuevos. Con ~200
 
 ### 1. ¿Cuántas filas físicas recibió cada lote en `bronze_transactions_incremental`? Escribí una consulta que muestre el resultado por `source_batch_id`.
 
-**Consulta / referencia:**
+```sql
+SELECT source_batch_id, count(*) AS filas_fisicas
+FROM workspace.bigdata_tfernandezaddoumie.bronze_transactions_incremental
+GROUP BY source_batch_id
+ORDER BY source_batch_id;
+```
 
-_Pendiente._
+| source_batch_id | filas_fisicas |
+|---|---:|
+| batch_002 | 204 |
+| batch_003 | 204 |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Cada lote recibió 204 filas físicas: 200 transacciones normales + 4 casos de prueba que agrega el generador (la corrección de la transacción 42, un duplicado exacto, un importe N/A y un cliente inexistente).
 
 ### 2. Para cada lote, ¿cuántas transacciones fueron aceptadas y cuántas quedaron en `silver_transactions_quarantine`? Reconciliá tus resultados con `gold_batch_summary`.
 
-**Consulta / referencia:**
+```sql
+WITH aceptadas AS (
+  SELECT source_batch_id, count(*) AS aceptadas_silver
+  FROM workspace.bigdata_tfernandezaddoumie.silver_transactions
+  GROUP BY source_batch_id
+),
+rechazadas AS (
+  SELECT source_batch_id, count(*) AS rechazadas_cuarentena
+  FROM workspace.bigdata_tfernandezaddoumie.silver_transactions_quarantine
+  GROUP BY source_batch_id
+)
+SELECT g.source_batch_id,
+       a.aceptadas_silver,      g.accepted_transactions,
+       r.rechazadas_cuarentena, g.rejected_transactions
+FROM workspace.bigdata_tfernandezaddoumie.gold_batch_summary g
+LEFT JOIN aceptadas  a ON g.source_batch_id = a.source_batch_id
+LEFT JOIN rechazadas r ON g.source_batch_id = r.source_batch_id
+ORDER BY g.source_batch_id;
+```
 
-_Pendiente._
+| source_batch_id | aceptadas_silver | accepted_transactions | rechazadas_cuarentena | rejected_transactions |
+|---|---:|---:|---:|---:|
+| batch_002 | 200 | 200 | 2 | 2 |
+| batch_003 | 201 | 201 | 2 | 2 |
+| initial | 49948 | 49948 | 51 | 51 |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+En los dos lotes las cantidades de Silver y de la cuarentena coinciden exactamente con gold_batch_summary: batch_002 tiene 200 aceptadas y 2 rechazadas, y batch_003 tiene 201 aceptadas y 2 rechazadas. La diferencia de 1 entre lotes es la transacción 42: llegó corregida en los dos lotes, pero en Silver queda una sola versión (la más reciente, de batch_003), así que hoy cuenta como aceptada de batch_003.
 
 ### 3. ¿Qué motivos de rechazo aparecen en la cuarentena y cuántos registros tiene cada uno por lote? ¿Los rechazos observados coinciden con los casos introducidos por el generador?
 
-**Consulta / referencia:**
+```sql
+SELECT source_batch_id, quality_reason, count(*) AS registros
+FROM workspace.bigdata_tfernandezaddoumie.silver_transactions_quarantine
+WHERE source_batch_id IN ('batch_002', 'batch_003')
+GROUP BY source_batch_id, quality_reason
+ORDER BY source_batch_id, quality_reason;
+```
 
-_Pendiente._
+| source_batch_id | quality_reason | registros |
+|---|---|---:|
+| batch_002 | INVALID_AMOUNT | 1 |
+| batch_002 | UNKNOWN_CUSTOMER | 1 |
+| batch_003 | INVALID_AMOUNT | 1 |
+| batch_003 | UNKNOWN_CUSTOMER | 1 |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Sí, coinciden con los casos que introduce el generador (generate_incremental_data.py). En cada lote agrega exactamente dos registros inválidos: uno con amount = 'N/A', que en Silver no se puede convertir a número y cae en INVALID_AMOUNT, y otro con customer_id = 5999, un cliente que no existe (los clientes van del 0 al 4999), que cae en UNKNOWN_CUSTOMER. Los otros dos casos de prueba no generan rechazos: el duplicado exacto se elimina en la deduplicación de Silver, y la corrección de la transacción 42 es válida y se aplica con el MERGE.
 
 ### 4. Seguí la transacción `42` desde `bronze_transactions_all` hasta `silver_transactions`. ¿Cuántas versiones existen en Bronze y cuál quedó vigente en Silver? Mostrá las columnas que justifican la elección.
 
-**Consulta / referencia:**
+```sql
+SELECT transaction_id, source_batch_id, updated_at, amount, customer_id, product_id
+FROM workspace.bigdata_tfernandezaddoumie.bronze_transactions_all
+WHERE transaction_id = '42'
+ORDER BY updated_at;
+```
 
-_Pendiente._
+| transaction_id | source_batch_id | updated_at | amount | customer_id | product_id |
+|---|---|---|---|---|---|
+| 42 | initial | 2026-03-06 02:07:52 | 600.11 | 317 | 273 |
+| 42 | batch_002 | 2026-03-10 02:00:00 | 1999.99 | 0 | 0 |
+| 42 | batch_003 | 2026-03-11 02:00:00 | 1999.99 | 0 | 0 |
 
-**Resultado:**
+```sql
+SELECT transaction_id, source_batch_id, updated_at, amount, customer_id, product_id
+FROM workspace.bigdata_tfernandezaddoumie.silver_transactions
+WHERE transaction_id = 42;
+```
 
-_Pendiente._
+| transaction_id | source_batch_id | updated_at | amount | customer_id | product_id |
+|---|---|---|---|---|---|
+| 42 | batch_003 | 2026-03-11 02:00:00 | 1999.99 | 0 | 0 |
 
-**Respuesta:**
-
-_Pendiente._
+En Bronze hay 3 versiones y en Silver quedó una sola, la de `batch_003`, porque tiene el `updated_at` más reciente. Silver se queda con la última versión con un `ROW_NUMBER()` ordenado por `updated_at DESC`, y el `MERGE` solo actualiza si llega un `updated_at` mayor.
 
 ### 5. Comprobá mediante una consulta que `silver_transactions` tiene una sola fila por `transaction_id`. ¿Qué resultado indicaría que la deduplicación falló?
 
-**Consulta / referencia:**
+```sql
+SELECT count(*) AS filas,
+       count(DISTINCT transaction_id) AS ids_distintos
+FROM workspace.bigdata_tfernandezaddoumie.silver_transactions;
+```
 
-_Pendiente._
+| filas | ids_distintos |
+|---:|---:|
+| 50349 | 50349 |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+La cantidad de filas es igual a la de `transaction_id` distintos, así que hay una sola fila por transacción lo que nos indica que la deduplicación no falló. 
 
 ### 6. Calculá la tasa de rechazo de cada lote como `rechazadas / (aceptadas + rechazadas)` en `gold_batch_summary`. ¿Es correcto comparar solamente las cantidades absolutas si los lotes tienen tamaños diferentes?
 
-**Consulta / referencia:**
+```sql
+SELECT source_batch_id,
+       accepted_transactions AS aceptadas,
+       rejected_transactions AS rechazadas,
+       accepted_transactions + rejected_transactions AS total,
+       round(100 * rejected_transactions / (accepted_transactions + rejected_transactions), 2) AS tasa_rechazo_pct
+FROM workspace.bigdata_tfernandezaddoumie.gold_batch_summary
+ORDER BY source_batch_id;
+```
 
-_Pendiente._
+| source_batch_id | aceptadas | rechazadas | total | tasa_rechazo_pct |
+|---|---:|---:|---:|---:|
+| batch_002 | 200 | 2 | 202 | 0.99 |
+| batch_003 | 201 | 2 | 203 | 0.99 |
+| initial | 49948 | 51 | 49999 | 0.10 |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Como vimos en el notebook de visualización, no es correcto comparar solo cantidades absolutas. Mirando los absolutos, la carga inicial parece la peor (51 rechazos contra 2), pero en proporción es la mejor: 0,10% contra 0,99% de los lotes nuevos, casi 10 veces menos. Igual hay que tener en cuenta que los lotes nuevos son muy chicos.
 
 ### 7. ¿Qué día presenta el mayor monto total y cuál presenta la mayor cantidad de transacciones? Consultá `gold_daily_sales` y explicá si ambos máximos coinciden.
 
-**Consulta / referencia:**
+```sql
+WITH diario AS (
+  SELECT sale_date,
+         SUM(total_amount)      AS monto_total,
+         SUM(transaction_count) AS transacciones
+  FROM workspace.bigdata_tfernandezaddoumie.gold_daily_sales
+  GROUP BY sale_date
+)
+(SELECT 'Mayor monto' AS criterio, * FROM diario ORDER BY monto_total DESC LIMIT 1)
+UNION ALL
+(SELECT 'Más transacciones' AS criterio, * FROM diario ORDER BY transacciones DESC LIMIT 1);
+```
 
-_Pendiente._
+| criterio | sale_date | monto_total | transacciones |
+|---|---|---:|---:|
+| Mayor monto | 2026-03-01 | 7310840.77 | 7236 |
+| Más transacciones | 2026-03-01 | 7310840.77 | 7236 |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Ambos máximos coinciden: el 2026-03-01 es el día de mayor monto y también el de más transacciones. Que coincidan indica un ticket promedio estable entre días, como se ve en el notebook de visualización.
 
 ### 8. ¿Qué canal de pago tiene la mayor tasa global de fraude? Calculala como `SUM(fraud_transactions) / SUM(transaction_count)` y explicá por qué no corresponde promediar directamente `fraud_rate`.
 
-**Consulta / referencia:**
+```sql
+SELECT payment_channel,
+       SUM(transaction_count)  AS transacciones,
+       SUM(fraud_transactions) AS fraudes,
+       round(100 * SUM(fraud_transactions) / SUM(transaction_count), 2) AS tasa_fraude_pct,
+       round(100 * AVG(fraud_rate), 2) AS promedio_simple_pct
+FROM workspace.bigdata_tfernandezaddoumie.gold_daily_sales
+GROUP BY payment_channel
+ORDER BY tasa_fraude_pct DESC;
+```
 
-_Pendiente._
+| payment_channel | transacciones | fraudes | tasa_fraude_pct | promedio_simple_pct |
+|---|---:|---:|---:|---:|
+| transfer | 16723 | 2327 | 13.91 | 13.91 |
+| wallet | 16724 | 2169 | 12.97 | 12.76 |
+| card | 16902 | 2119 | 12.54 | 12.47 |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+El canal con mayor tasa global de fraude es `transfer` (13,91%). No corresponde promediar `fraud_rate` porque es una tasa calculada para cada fila de Gold (día × país × categoría × canal), y cada fila tiene una cantidad de transacciones distinta: el promedio simple le da el mismo peso a un grupo de 1 transacción que a uno de 100. La tasa correcta se recalcula sumando numerador y denominador.
 
 ### 9. ¿Qué combinación de país y categoría concentra el mayor monto vendido? Mostrá también la combinación líder dentro de cada país.
 
-**Consulta / referencia:**
+```sql
+WITH pais_categoria AS (
+  SELECT country, category, SUM(total_amount) AS monto_total
+  FROM workspace.bigdata_tfernandezaddoumie.gold_daily_sales
+  GROUP BY country, category
+),
+ranking AS (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY country ORDER BY monto_total DESC) AS rn
+  FROM pais_categoria
+)
+SELECT country, category, monto_total
+FROM ranking
+WHERE rn = 1
+ORDER BY monto_total DESC;
+```
 
-_Pendiente._
+| country | category | monto_total |
+|---|---|---:|
+| BR | home | 2361959.97 |
+| UY | home | 2323924.46 |
+| AR | books | 2267722.26 |
+| MX | books | 2235941.63 |
+| CL | home | 2167748.03 |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+La combinación con mayor monto es Brasil × home ($2,36 M), que es la primera fila: el máximo global es necesariamente el líder de su país. La categoría líder cambia según el mercado: home lidera en Brasil, Uruguay y Chile, y books en Argentina y México. Esto se visualiza de manera más clara en el gráfico del notebook de visualización con un heatmap. 
 
 ### 10. Compará las dos primeras filas de `pipeline_run_audit` correspondientes a la reejecución de `batch_002`. ¿Qué métricas permanecen iguales y qué columna demuestra que se realizó la comparación de idempotencia?
 
-**Consulta / referencia:**
+```sql
+SELECT *
+FROM workspace.bigdata_tfernandezaddoumie.pipeline_run_audit
+ORDER BY recorded_at
+LIMIT 2;
+```
 
-_Pendiente._
+| job_run_id | expected_batch_id | silver_rows | quarantine_rows | gold_rows | gold_total_amount | recorded_at | idempotence_compared |
+|---|---|---:|---:|---:|---:|---|---|
+| 1112651856493980 | batch_002 | 50149 | 53 | 598 | 50286183.33 | 2026-10-03 13:13:25 | false |
+| 789021784344547 | batch_002 | 50149 | 53 | 598 | 50286183.33 | 2026-10-03 13:33:16 | true |
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Las cuatro métricas son iguales en ambas corridas: `silver_rows`, `quarantine_rows`, `gold_rows` y `gold_total_amount`. Solo cambian `job_run_id` y `recorded_at`, porque son dos ejecuciones distintas. La columna que demuestra la comparación es `idempotence_compared = true` en la segunda fila: el notebook 04 encontró una corrida anterior del mismo lote, exigió que las métricas fueran idénticas y recién ahí registró la fila. En la primera es `false` porque no había una corrida previa con la cual comparar.
 
 ### Interpretación del código y del pipeline
 
