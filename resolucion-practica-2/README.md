@@ -193,7 +193,7 @@ FROM workspace.bigdata_tfernandezaddoumie.silver_transactions;
 |---:|---:|
 | 50349 | 50349 |
 
-La cantidad de filas es igual a la de `transaction_id` distintos, así que hay una sola fila por transacción lo que nos indica que la deduplicación no falló. 
+La cantidad de filas es igual a la de `transaction_id` distintos, así que hay una sola fila por transacción lo que nos indica que la deduplicación no falló. Hubiera fallado si filas fuera mayor que ids_distintos, porque eso significaría que algún transaction_id aparece más de una vez.
 
 ### 6. Calculá la tasa de rechazo de cada lote como `rechazadas / (aceptadas + rechazadas)` en `gold_batch_summary`. ¿Es correcto comparar solamente las cantidades absolutas si los lotes tienen tamaños diferentes?
 
@@ -326,8 +326,6 @@ Esto afecta directamente a la 42: su versión inicial queda con `updated_at = 20
 
 ### 14. En `quality_rules.py`, ¿qué ventaja ofrece `try_cast` frente a un `cast` convencional cuando llega un importe como `N/A`?
 
-**Consulta / referencia:**
-
 **Referencia:** `common/quality_rules.py`, función `add_transaction_types` (`try_cast(amount AS DECIMAL(12,2))`), y `add_quality_reason` (regla `INVALID_AMOUNT`).
 
 Con un `cast` convencional, `cast('N/A' AS DECIMAL(12,2))` tira un error, lo que frenaría el Job. Con `try_cast`, el valor que no se puede convertir queda en `NULL` sin error, y el pipeline sigue. Ese `NULL` después lo detecta la regla de calidad (`amount_typed IS NULL` → `INVALID_AMOUNT`) y el registro va a la cuarentena con su motivo. Es lo que permite el patrón de aceptar los registros buenos y apartar los malos en lugar de frenar todo. Además, la función conserva la columna original en texto, así que en la cuarentena queda guardado el `'N/A'` tal como llegó.
@@ -373,8 +371,9 @@ El `MERGE` compara cada transacción válida que llega (`s`) con la tabla Silver
 
 Silver es la fuente de verdad: tiene una fila por transacción identificada por una clave (`transaction_id`), así que tiene sentido actualizarla de forma incremental con `MERGE`, insertando lo nuevo y corrigiendo lo que cambió. Gold, en cambio, son agregaciones que se pueden recalcular completas a partir de Silver, por eso se reconstruyen con `CREATE OR REPLACE` en cada corrida.
 
-Silver solo modifica lo necesario (inserta nuevas y actualiza correcciones) sin reescribir toda la tabla. Esto hace que la lógica sea más compleja (clave, condición de `updated_at`, deduplicación previa obligatoria) pero logra que si el `MERGE` tiene un error, el dato incorrecto queda persistido.
-La carga de Gold es simple y siempre queda consistente con Silver. Por ejemplo, cuando se corrigió la 42 (cambió de cliente, producto y día), pasó solo al grupo correcto sin lógica extra. Como desventaja podríamos mencionar el costo de recalcular todo cada vez que se crean las tablas. Es como que se va "pisando", pero al ser datos agregados y pocos registros en comparación a Silver no es significativo. 
+Silver solo modifica lo necesario (inserta nuevas y actualiza correcciones) sin reescribir toda la tabla. Esto hace que la lógica sea más compleja (clave, condición de `updated_at`, deduplicación previa obligatoria).
+
+La carga de Gold es simple y siempre queda consistente con Silver. Por ejemplo, cuando se corrigió la 42 (cambió de cliente, producto y día), pasó solo al grupo correcto sin lógica extra. Como desventaja podríamos mencionar que cada corrida relee y re-agrega todo Silver, que crece con cada lote.
 
 ### 19. ¿Por qué `expected_batch_id` no participa en la detección del archivo nuevo? Indicá qué parte del pipeline descubre `batch_003` y qué parte utiliza el parámetro.
 
