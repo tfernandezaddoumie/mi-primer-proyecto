@@ -306,140 +306,86 @@ Las cuatro métricas son iguales en ambas corridas: `silver_rows`, `quarantine_r
 
 ### 11. En `01_ingest_bronze_incremental.ipynb`, ¿qué problema resuelve `COPY INTO` y qué información utiliza para evitar cargar dos veces el mismo archivo físico?
 
-**Consulta / referencia:**
+**Referencia:** `01_ingest_bronze_incremental.ipynb`, celda 4 (`COPY INTO ... FROM '.../incoming/transactions/'`).
 
-_Pendiente._
-
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+`COPY INTO` resuelve la **carga incremental**: cada vez que corre, lista la carpeta `incoming/transactions/` y carga en `bronze_transactions_incremental` solo los archivos que todavía no procesó, sin volver a leer los anteriores. Para saber cuáles ya cargó usa la **ruta de cada archivo**, que queda registrada en el log de transacciones (`_delta_log`) de la propia tabla Delta destino. Por eso es idempotente: en la segunda ejecución del Job insertó 0 filas, y en la tercera cargó solo `transactions_batch_003.csv` y salteó el de `batch_002`.
 
 ### 12. ¿Por qué la vista `bronze_transactions_all` usa `UNION ALL` en lugar de eliminar duplicados? ¿En qué capa se resuelven los duplicados de negocio y por qué?
 
-**Consulta / referencia:**
+**Referencia:** `01_ingest_bronze_incremental.ipynb`, celda 5 (`CREATE OR REPLACE VIEW bronze_transactions_all ... UNION ALL ...`) y `02_build_silver.ipynb`, celda 6 (`dropDuplicates` + `ROW_NUMBER`).
 
-_Pendiente._
-
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Usa `UNION ALL` porque Bronze tiene que conservar todo lo que llegó, tal cual, incluidos los duplicados, para poder auditar después qué se recibió. Además, un `UNION` solo eliminaría duplicados **exactos**, y los duplicados importantes son de negocio: la transacción 42 llega 3 veces con montos y fechas distintas, así que un `UNION` no la tocaría. Decidir qué versión vale es una regla de negocio (la de `updated_at` más reciente), y por eso se resuelve en **Silver**: primero `dropDuplicates` elimina los duplicados exactos y después `ROW_NUMBER()` por `transaction_id`, ordenado por `updated_at DESC`, se queda con la última versión de cada transacción.
 
 ### 13. ¿Por qué las transacciones iniciales reciben `source_batch_id='initial'` y usan `event_ts` como `updated_at`? ¿Cómo afecta eso a la corrección de la transacción `42`?
 
-**Consulta / referencia:**
+**Referencia:** `01_ingest_bronze_incremental.ipynb`, celda 5 (`'initial' AS source_batch_id, event_ts AS updated_at`).
 
-_Pendiente._
+Los datos de las transacciones (`bronze_transactions`) no tienen las columnas `source_batch_id` ni `updated_at`, porque no llegaron en lotes. Para poder unirlos con `UNION ALL` a los lotes incrementales, las dos partes necesitan las mismas columnas. Se les asigna `'initial'` para rotular su origen y se usa `event_ts` como `updated_at`, asumiendo que la versión original de una transacción se actualizó por última vez cuando ocurrió.
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Esto afecta directamente a la 42: su versión inicial queda con `updated_at = 2026-03-06 02:07:52`, anterior a las correcciones de `batch_002` (`2026-03-10 02:00`) y `batch_003` (`2026-03-11 02:00`). Por eso, al ordenar por `updated_at DESC` en Silver, siempre gana la corrección más reciente.
 
 ### 14. En `quality_rules.py`, ¿qué ventaja ofrece `try_cast` frente a un `cast` convencional cuando llega un importe como `N/A`?
 
 **Consulta / referencia:**
 
-_Pendiente._
+**Referencia:** `common/quality_rules.py`, función `add_transaction_types` (`try_cast(amount AS DECIMAL(12,2))`), y `add_quality_reason` (regla `INVALID_AMOUNT`).
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Con un `cast` convencional, `cast('N/A' AS DECIMAL(12,2))` tira un error, lo que frenaría el Job. Con `try_cast`, el valor que no se puede convertir queda en `NULL` sin error, y el pipeline sigue. Ese `NULL` después lo detecta la regla de calidad (`amount_typed IS NULL` → `INVALID_AMOUNT`) y el registro va a la cuarentena con su motivo. Es lo que permite el patrón de aceptar los registros buenos y apartar los malos en lugar de frenar todo. Además, la función conserva la columna original en texto, así que en la cuarentena queda guardado el `'N/A'` tal como llegó.
 
 ### 15. Las reglas de calidad asignan una única `quality_reason`. ¿Qué sucede si un registro viola más de una regla y por qué importa el orden de las condiciones?
 
-**Consulta / referencia:**
+**Referencia:** `common/quality_rules.py`, función `add_quality_reason` (cadena de `F.when(...).when(...)`).
 
-_Pendiente._
+La función es un `CASE WHEN` encadenado: devuelve la **primera** condición que se cumple y no evalúa el resto. Si un registro viola más de una regla, solo queda registrado el primer motivo. Por ejemplo, un registro con `amount = 'N/A'` y un cliente inexistente quedaría solo como `INVALID_AMOUNT`.
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+El orden importa porque define la prioridad del diagnóstico. Primero van las reglas de formato y tipo, y al final las referenciales (`UNKNOWN_CUSTOMER`, `UNKNOWN_PRODUCT`). Si llega `customer_id = 'abc'`, el `try_cast` da `NULL` y el `LEFT JOIN` tampoco encuentra el cliente: con este orden cae en `INVALID_CUSTOMER_ID`, que es el problema real. Si `UNKNOWN_CUSTOMER` estuviera primero, se lo etiquetaría como un cliente inexistente cuando en realidad el id está mal formado.
 
 ### 16. Explicá cómo se construye `_record_key` y cómo se usa junto con `row_number`. ¿Qué caso cubre el hash cuando `transaction_id` no puede convertirse a un número?
 
-**Consulta / referencia:**
+**Referencia:** `02_build_silver.ipynb`, celda 6 (`record_key = F.coalesce(...)` y `Window.partitionBy("_record_key")`).
 
-_Pendiente._
+`_record_key` es la clave con la que se agrupan las versiones de una misma transacción. Se construye con un `COALESCE`: si `transaction_id_typed` existe, usa ese id; si es `NULL`, usa un `sha2` (hash de 256 bits) de las 10 columnas originales concatenadas, reemplazando los `NULL` por `'<NULL>'` para que dos filas distintas no generen el mismo texto. Después, `ROW_NUMBER() OVER (PARTITION BY _record_key ORDER BY updated_at_typed DESC, source_batch_id DESC)` numera las versiones de cada clave y se queda con `_rn = 1`, la más reciente.
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+El hash cubre el caso de un `transaction_id` inválido (por ejemplo `'abc'` o vacío), que al tipar queda en `NULL`. Si se particionara directamente por el id tipado, todas esas filas caerían en un mismo grupo `NULL`, el `ROW_NUMBER` dejaría una sola y las demás desaparecerían sin quedar ni en Silver ni en la cuarentena. Con el hash, cada fila inválida forma su propio grupo, sobrevive con `_rn = 1` y llega a la cuarentena con `INVALID_TRANSACTION_ID`.
 
 ### 17. Interpretá las dos cláusulas principales del `MERGE` de `silver_transactions`. ¿Cuándo se actualiza una fila existente y cuándo se inserta una nueva?
 
-**Consulta / referencia:**
+**Referencia:** `02_build_silver.ipynb`, celda 7.
 
-_Pendiente._
+```sql
+MERGE INTO silver_transactions t
+USING _valid_transactions s
+ON t.transaction_id = s.transaction_id
+WHEN MATCHED AND s.updated_at > t.updated_at THEN UPDATE SET *
+WHEN NOT MATCHED THEN INSERT *
+```
 
-**Resultado:**
+El `MERGE` compara cada transacción válida que llega (`s`) con la tabla Silver (`t`) usando `transaction_id` como clave:
 
-_Pendiente._
+- **`WHEN NOT MATCHED THEN INSERT`**: si el `transaction_id` no existe en Silver, se inserta. Es el caso de las 200 transacciones nuevas de cada lote.
+- **`WHEN MATCHED AND s.updated_at > t.updated_at THEN UPDATE`**: si ya existe y la versión que llega es más reciente, se pisa la fila completa. Es el caso de la corrección de la transacción 42.
+- Si ya existe pero la versión no es más reciente, no se hace nada. Esa condición es la que hace al `MERGE` idempotente: al reejecutar con los mismos datos, ningún `updated_at` es mayor, así que no cambia nada. Además, evita que una versión vieja que llegue tarde pise a una más nueva.
 
-**Respuesta:**
-
-_Pendiente._
 
 ### 18. ¿Por qué las tablas Gold se reconstruyen completamente en esta práctica mientras Silver se actualiza con `MERGE`? Mencioná una ventaja y una limitación de cada estrategia.
 
-**Consulta / referencia:**
+**Referencia:** `02_build_silver.ipynb`, celda 7 (`MERGE INTO silver_transactions`), y `03_build_gold.ipynb`, celdas 4 a 6 (`CREATE OR REPLACE TABLE gold_...`).
 
-_Pendiente._
+Silver es la fuente de verdad: tiene una fila por transacción identificada por una clave (`transaction_id`), así que tiene sentido actualizarla de forma incremental con `MERGE`, insertando lo nuevo y corrigiendo lo que cambió. Gold, en cambio, son agregaciones que se pueden recalcular completas a partir de Silver, por eso se reconstruyen con `CREATE OR REPLACE` en cada corrida.
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Silver solo modifica lo necesario (inserta nuevas y actualiza correcciones) sin reescribir toda la tabla. Esto hace que la lógica sea más compleja (clave, condición de `updated_at`, deduplicación previa obligatoria) pero logra que si el `MERGE` tiene un error, el dato incorrecto queda persistido.
+La carga de Gold es simple y siempre queda consistente con Silver. Por ejemplo, cuando se corrigió la 42 (cambió de cliente, producto y día), pasó solo al grupo correcto sin lógica extra. Como desventaja podríamos mencionar el costo de recalcular todo cada vez que se crean las tablas. Es como que se va "pisando", pero al ser datos agregados y pocos registros en comparación a Silver no es significativo. 
 
 ### 19. ¿Por qué `expected_batch_id` no participa en la detección del archivo nuevo? Indicá qué parte del pipeline descubre `batch_003` y qué parte utiliza el parámetro.
 
-**Consulta / referencia:**
+**Referencia:** `01_ingest_bronze_incremental.ipynb`, celda 4 (`COPY INTO`), y `04_validate_pipeline.ipynb`, celdas 4 y 5.
 
-_Pendiente._
+El que descubre `batch_003` es el `COPY INTO` del notebook 01: lista la carpeta `incoming/transactions/`, compara contra su registro de archivos ya cargados y toma `transactions_batch_003.csv` porque es nuevo, sin usar ningún parámetro. El parámetro `expected_batch_id` lo usa solo el notebook 04, para saber qué lote verificar: que haya llegado a Bronze y a Silver, que tenga sus rechazos en cuarentena, que aparezca en `gold_batch_summary` y que la corrección de la 42 venga de ese lote.
 
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Está separado a propósito: un pipeline real corre de forma programada y no sabe de antemano cómo se llama el archivo que va a llegar, así que tiene que procesar lo que haya sin que nadie cambie parámetros. `expected_batch_id` es una expectativa del test, no una instrucción del ETL. Si se deja en `batch_002` después de cargar `batch_003`, las tareas 01 a 03 procesan el lote nuevo sin problemas, pero `validate` falla. Me pasó al correr el notebook 04 a mano: falló el control `historical_correction_applied`, porque la 42 ya venía de `batch_003` y no de `batch_002` cuando yo había dejado el 002 como `expected_batch_id`. El error indicaba una expectativa de prueba incorrecta, no un problema del pipeline.
 
 ### 20. Si la tarea `build_silver` falla, ¿qué ocurre con `build_gold` y `validate` en el Job? Explicá cómo las dependencias del DAG evitan publicar o validar resultados incompletos.
 
-**Consulta / referencia:**
+En el DAG, `build_gold` depende de `build_silver` y `validate` depende de `build_gold`, y por defecto cada tarea corre solo si todas las anteriores terminaron bien. Si `build_silver` falla, `build_gold` y `validate` no se ejecutan: quedan como *Upstream failed* y la corrida del Job queda marcada en rojo.
 
-_Pendiente._
-
-**Resultado:**
-
-_Pendiente._
-
-**Respuesta:**
-
-_Pendiente._
+Así se evitan resultados incompletos: como `build_gold` no corre, las tablas Gold no se reconstruyen sobre un Silver a medias y conservan la versión de la última corrida exitosa. Como `validate` tampoco corre, no se agrega ninguna fila a `pipeline_run_audit`, y la auditoría solo registra corridas completas.
