@@ -1,4 +1,4 @@
-# Entrega práctica 5 — MLOps con MLflow
+# Resolución práctica 5 — MLOps con MLflow
 
 - **Nombre:** Tomas Fernandez Addoumie
 - **student_id:** tfernandezaddoumie
