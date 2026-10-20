@@ -45,24 +45,36 @@ El modelo tiene esquema flexible porque los documentos de una misma colección n
 
 ## Grafos
 
-**12.**
+**12.** El grafo tiene 5.000 nodos Customer (738 marcados), 2.361 nodos Device y 5.400 aristas USES.
 
-**13.**
+**13.** El SQL necesitó 3 joins para el patrón de 2 saltos y 5 joins para el de 4: cada flecha del patrón agrega un join contra la tabla de aristas. Neo4j recorre relaciones más eficientemente gracias a la index-free adjacency. 
 
-**14.**
+**14.** La propagación de etiquetas convergió en la iteración 14. El componente más grande tiene 23 nodos (c:122).
 
-**15.**
+**15.** Al repartir los nodos con hash(id) mod 4, el 74,4% de las aristas quedó entre máquinas distintas, contra 0% al repartir por componente. Es difícil distribuir una base de grafos porque su valor está en las relaciones: cada arista cuyos extremos quedan en máquinas distintas obliga a un salto por la red. Agrupar por componente deja todas las aristas dentro de cada máquina.
 
 ## Vectorial
 
-**16.**
+**16.** El vector de cada cliente resume su comportamiento en 10 números:
 
-**17.**
+5 son la proporción de su gasto en cada categoría (electronics, home, books, sports, fashion)
+3 son la proporción de sus pagos por canal (card, wallet, transfer)
+2 son su ticket promedio (dividido por 2.000) y la proporción de compras de más de 1.500
 
-**18.**
+La similitud coseno mide qué tan parecida es la dirección de dos vectores (1 = misma dirección), es decir qué tan parecido es el comportamiento de dos clientes.
+
+**17.** Entre los 10 vecinos de los clientes marcados hay un 31,6% de marcados, contra una tasa base de 14,8% (y 13,2% entre los vecinos de no marcados). Buscar “vecinos parecidos” sirve para encontrar, dado un cliente marcado, otros clientes que se comportan parecido, y para clasificar a un cliente según sus vecinos.
+
+**18.** Con nprobe=4 se obtiene un recall de 0,872 escaneando el 5,985% de los vectores. La búsqueda aproximada (ANN) gana velocidad, porque compara contra una fracción de los vectores en vez de contra todos como el k-NN exacto. Pierde exactitud porque puede no encontrar algunos de los vecinos verdaderos.
 
 ## Columnar
 
-**19.**
+**19.** Los datos ocupan 50,0 MB en CSV, 121,1 MB en JSON y 5,3 MB en Parquet. Para la consulta de amount sobre Parquet, Spark leyó solo la columna amount. Con los datos ordenados por amount se pueden saltear 7 de 8 archivos, contra 0 de 8 escritos al azar.
 
-**20.**
+**20.** El formato columnar es bueno para analítica porque permite:
+
+- leer solo las columnas que pide la consulta
+- comprimir mejor, porque guarda juntos valores del mismo tipo
+- saltear bloques enteros usando estadísticas min/max
+
+Es poco conveniente para modificar una fila por vez porque los valores de esa fila no están juntos: quedan repartidos entre los bloques de cada columna. En cambio, el formato orientado a filas, el de las bases OLTP, guarda cada fila completa en un solo lugar.
