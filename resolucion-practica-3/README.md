@@ -1,4 +1,4 @@
-# Resolucion práctica 3 — Bases de datos NoSQL
+# Resolución práctica 3 — Bases de datos NoSQL
 
 - **Nombre:** Tomas Fernandez Addoumie
 - **student_id:** tfernandezaddoumie
@@ -6,7 +6,7 @@
 
 ## CAP y PACELC
 
-**1.** En modo CP, la réplica C, (aislada de A y B) no pudo responder. La lectura devolvió ERROR: no disponible y la escritura saldo=50 dio ERROR: sin quórum. 
+**1.** En modo CP, la réplica C (aislada de A y B) no pudo responder. La lectura devolvió ERROR: no disponible y la escritura saldo=50 dio ERROR: sin quórum. 
 
 CP sacrifica disponibilidad. En modo AP, C respondió saldo = 100 aunque del otro lado ya se había escrito 80, y además aceptó la escritura de 50. AP sacrifica consistencia.
 
@@ -14,7 +14,7 @@ CP sacrifica disponibilidad. En modo AP, C respondió saldo = 100 aunque del otr
 
 **3.** Con W=1 la p99 fue 9,6 ms y con W=3, 55,6 ms. A cambio de esperar a las tres réplicas se gana consistencia: la escritura queda confirmada en todas, así que cualquier lectura posterior ve el valor nuevo.
 
-Aca se ve el PACELC: en operación normal hay un trade-off de latencia vs. consistencia.
+Acá se ve el PACELC: en operación normal hay un trade-off de latencia vs. consistencia.
 
 **4.** Pudo seguir escribiendo el lado ABC, porque tiene 3 replicas y cumple con el quorum. El lado DE, con solo 2 réplicas, no tiene quórum y por eso la escritura por D dio ERROR y la lectura por E también dio ERROR.
 
@@ -41,7 +41,7 @@ El modelo tiene esquema flexible porque los documentos de una misma colección n
 
 **10.** El documento más grande pesa 5,2 KB, a unos 225 bytes por transacción. El problema de un documento que crece sin límite es que choca con el tope de 16 MB de MongoDB: a ese ritmo, un cliente llegaría con unas 74.599 transacciones. Además, cada lectura o actualización del documento arrastra todo el historial embebido, aunque solo necesites el perfil. Por eso las listas que crecen indefinidamente conviene referenciarlas en lugar de embeberlas.
 
-**11.** El modelo documental resuelve bien las consultas por entidad: todo lo que se pregunta sobre un cliente y su historial se responde dentro de su documento, sin joins. Le cuestan más las consultas transversales, que agregan a través de muchos documentos, como el monto por categoría: hay que desarmar los arrays con explode y volver a trabajar con filas, que es lo que el relacional o el columnar hacen naturalmente.
+**11.** El modelo documental resuelve bien las consultas por entidad: todo lo que se pregunta sobre un cliente y su historial se responde dentro de su documento, sin joins. Le cuestan más las consultas transversales, que agregan a través de muchos documentos, como el monto por categoría: hay que desarmar los arrays con explode y volver a trabajar con filas.
 
 ## Grafos
 
@@ -57,9 +57,9 @@ El modelo tiene esquema flexible porque los documentos de una misma colección n
 
 **16.** El vector de cada cliente resume su comportamiento en 10 números:
 
-5 son la proporción de su gasto en cada categoría (electronics, home, books, sports, fashion)
-3 son la proporción de sus pagos por canal (card, wallet, transfer)
-2 son su ticket promedio (dividido por 2.000) y la proporción de compras de más de 1.500
+- 5 son la proporción de su gasto en cada categoría (electronics, home, books, sports, fashion)
+- 3 son la proporción de sus pagos por canal (card, wallet, transfer)
+- 2 son su ticket promedio (dividido por 2.000) y la proporción de compras de más de 1.500
 
 La similitud coseno mide qué tan parecida es la dirección de dos vectores (1 = misma dirección), es decir qué tan parecido es el comportamiento de dos clientes.
 
