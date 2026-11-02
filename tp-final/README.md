@@ -6,7 +6,11 @@
 
 ## Objetivo
 
-Estimar la probabilidad de que un cliente de tarjeta de crédito caiga en mora el mes siguiente, comparando tres algoritmos con MLflow, y traducir el modelo elegido en una herramienta de gestión preventiva para el área de cobranzas.
+Elegí la opción 2B porque quería armar algo relacionado con mi trabajo, que es en el área de Analytics de Mercado Pago. Al principio pensé en un proyecto de investigación sobre la arquitectura tipo "Data Mesh" que usamos en MP (que antes de entrar no sabía que existía, solo había trabajado con DW tradicionales) pero por privacidad de datos no se si iba a llegar muy lejos. Encontré un dataset muy sencillo y simplificado para armar un modelo de Machine Learning sobre el mundo bancario y me pareció una buena idea. 
+
+En mi día a día trabajo con modelos muy similares a este: Modelos de churn, modelos de propensión de uso de tarjeta de crédito. Este trata sobre la mora y eso en MP lo trabaja el área de Riesgos, por lo cual para mi es un input: el score de riesgo. 
+
+Para este trabajo, entonces, el objetivo es estimar la probabilidad de que un cliente de tarjeta de crédito caiga en mora el mes siguiente, comparando tres algoritmos con MLflow, y traducir el modelo elegido en una herramienta de gestión preventiva para el área de cobranzas.
 
 ## Contenido de la carpeta
 
@@ -27,7 +31,7 @@ Un banco que emite tarjetas de crédito quiere anticipar qué clientes van a cae
 
 ### Datos
 
-Usé el dataset público **Default of Credit Card Clients** (UCI Machine Learning Repository, licencia CC BY 4.0). Tiene 30.000 clientes de un banco de Taiwán, con datos de abril a septiembre de 2005. Lo elegí porque plantea el mismo problema que el caso de negocio (mora a nivel cliente), es público, no tiene datos identificatorios y tiene un tamaño que me permitió iterar rápido en Databricks Free Edition.
+Usé el dataset público **Default of Credit Card Clients** (UCI Machine Learning Repository, licencia CC BY 4.0). Tiene 30.000 clientes de un banco de Taiwán, con datos de abril a septiembre de 2005. 
 
 Cada fila es un cliente, con 6 meses de historia (sufijo 1 = septiembre, el mes más reciente; sufijo 6 = abril):
 
@@ -39,7 +43,11 @@ Cada fila es un cliente, con 6 meses de historia (sufijo 1 = septiembre, el mes 
 | `bill_amt1` … `bill_amt6` | Monto del resumen de cada mes (negativo = saldo a favor) |
 | `pay_amt1` … `pay_amt6` | Monto pagado en cada mes |
 
-### Variable objetivo
+Según mi experiencia personal, al empezar con un dataset armado de esta manera nos ahorramos gran parte del desarrollo de un modelo. Generalmente la parte de feature engineering y el armado de la base de datos es algo que lleva tiempo y acá ya partimos con esto resuelto. 
+
+Sobre los datos demográficos, como por ejemplo el sexo, me pregunté que sentido tenía incluirlos. Supongamos que el modelo nos indica que los varones son más propensos a caer en mora que las mujeres, ¿que hacemos con ese dato? Entiendo que nada, no veo aplicable a un caso real que la política de riesgos de un banco tome el sexo como una variable. Decidí meter todo igual y ver que dice el modelo sobre el peso de las variables. 
+
+### Target
 
 `default_next_month`: 1 si el cliente cayó en mora en octubre de 2005. El **22,1%** de los clientes cayó en mora, así que las clases están desbalanceadas.
 
@@ -52,19 +60,19 @@ Cada fila es un cliente, con 6 meses de historia (sufijo 1 = septiembre, el mes 
 5. Agrupé como "otros" los valores no documentados de `education` (0, 5 y 6; 468 clientes en total en esa categoría) y de `marriage` (0; 377 clientes en total en esa categoría).
 6. Guardé la tabla Delta `tp_credit_default`.
 
-Los valores -2 y 0 de `pay_*` no están documentados. Asumí la interpretación habitual (-2 = sin consumo, 0 = pago mínimo) y los mantuve como numéricos.
+Los valores -2 y 0 de `pay_*` no están documentados. Interpreté que: -2 es sin consumo, 0 es pago mínimo y los mantuve como numéricos.
 
 ### Exploración (sólo con train)
 
 ![Exploración](img/exploracion.png)
 
-- **Estado de pago del último mes:** es la señal más fuerte. Los clientes al día (-2, -1, 0) caen en mora entre 13% y 17%; con un mes de atraso, 34%; con dos o más, entre 60% y 78%. La relación no es lineal: es plana y después salta.
-- **Límite de crédito:** a mayor límite, menos mora (30% en el tramo más bajo contra 12% en el más alto). El límite ya refleja la evaluación de riesgo que hizo el banco al otorgarlo.
+- **Estado de pago del último mes:** es la señal más fuerte. Los clientes al día (-2, -1, 0) caen en mora entre 13% y 17%; con un mes de atraso, 34%; con dos o más, entre 60% y 78%. Esto parece de hecho obvio, porque el concepto de entrar en mora es justamente no pagar tu último resumen con X cantidad de días de atraso.
+- **Límite de crédito:** a mayor límite, menos mora (30% en el tramo más bajo contra 12% en el más alto). El límite ya refleja la evaluación de riesgo que hizo el banco al otorgarlo. A mejores scores de riesgos los bancos le emiten propuestas de crédito más elevadas por lo que esto también es razonable: a más limite, mejor score, menor probabilidad de default.
 - **Edad:** efecto chico (entre 20,5% y 26,5% según el tramo).
 
 ## 2. Modelos y estrategia de evaluación
 
-**Partición:** 80% train (24.021 clientes, 22,3% en mora) y 20% test (5.979 clientes, 21,3% en mora). Como todos los clientes comparten el mismo período, no es posible una partición temporal. Asigné cada cliente con un hash de su `id` (`pmod(xxhash64(id, 2026), 100) < 80`): es determinístico y da el mismo resultado en cada ejecución. Cada cliente aparece una sola vez, las variables son anteriores al mes que se predice y el preprocesamiento se ajusta sólo con train, dentro del pipeline, así que no hay fuga de información de test.
+**Partición:** 80% train (24.021 clientes, 22,3% en mora) y 20% test (5.979 clientes, 21,3% en mora). Como todos los clientes comparten el mismo período, no es posible una partición temporal. Asigné cada cliente con un hash de su `id` (`pmod(xxhash64(id, 2026), 100) < 80`): es determinístico y da el mismo resultado en cada ejecución. Cada cliente aparece una sola vez, las variables son anteriores al mes que se predice y el preprocesamiento se ajusta sólo con train, dentro del pipeline, así que no hay fuga de información de test. 
 
 **Métrica principal:** PR-AUC en test. Con 21% de clientes en mora, un modelo que dice siempre "paga" tiene 78,7% de accuracy sin detectar a nadie. El PR-AUC mide qué tan bien el modelo ordena el riesgo y no depende del umbral. Como referencia, un modelo al azar tiene un PR-AUC igual a la tasa de mora (0,213).
 
@@ -147,16 +155,14 @@ La elección es de negocio, no del modelo. Una alerta falsa cuesta poco: un cont
 
 - El **estado de pago del último mes (`pay_1`)** domina: al desordenarlo, el PR-AUC cae 0,172, más de 10 veces que con cualquier otra variable. El mejor predictor de la mora es el atraso reciente.
 - Le siguen, muy por detrás, el monto del último resumen y los estados de pago de meses anteriores.
-- **Variables demográficas:** `education` y `age` aportan muy poco (≈ 0,007), y `sex` y `marriage` no aportan nada (≈ 0 o negativo). Se podrían excluir sin perder capacidad predictiva, lo que además evita el riesgo de discriminar por atributos sensibles.
+- **Variables demográficas:** `education` y `age` aportan muy poco (≈ 0,007), y `sex` y `marriage` no aportan nada (≈ 0 o negativo). Se podrían excluir sin perder capacidad predictiva.
 - La importancia muestra qué usa el modelo para predecir, no qué causa la mora.
 
 ### 4.4 Limitaciones
 
-- **Partición no temporal:** test evalúa a otros clientes del mismo período, no a meses futuros. En producción, el comportamiento de los clientes o la economía pueden cambiar (deriva de datos), así que el resultado probablemente sea optimista.
-- **Contexto de los datos:** son de Taiwán, de 2005. Los patrones no se trasladan directamente a otro mercado o período.
+- **Contexto de los datos:** son de Taiwán, de 2005. Yo lo estoy analizando con contexto de negocio de 20 años despues y en una fintech.
 - **Una sola partición y hiperparámetros fijos:** no exploré otras particiones ni optimicé hiperparámetros. La diferencia entre gradient boosting y random forest es chica y podría cambiar con otra partición.
 - **Costos no cuantificados:** la elección del umbral depende de costos de negocio que el dataset no tiene.
-- **Valores no documentados:** interpreté -2 y 0 en `pay_*` con un supuesto.
 - **Escala:** usé Spark para la preparación, pero el entrenamiento se hace en memoria con scikit-learn. Para millones de clientes habría que entrenar de forma distribuida.
 
 ## 5. Cómo reproducir
