@@ -176,11 +176,3 @@ La elección es de negocio, no del modelo. Una alerta falsa cuesta poco: un cont
 3. Importar los dos notebooks en una carpeta del workspace y ejecutarlos completos y en orden, con el widget `student_id` correspondiente:
    - `01_datos_y_exploracion.ipynb` crea la tabla `tp_credit_default`;
    - `02_modelos.ipynb` crea el experimento, los tres runs y el análisis de negocio.
-
-La partición es determinística (hash del `id`) y los modelos usan `random_state = 42`, así que una nueva ejecución da los mismos resultados. No se requieren librerías adicionales: Spark, scikit-learn y MLflow vienen con la plataforma.
-
-## Fuentes y referencias
-
-- Yeh, I. C. (2009). *Default of Credit Card Clients* [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C55S3H
-- Yeh, I. C. y Lien, C. H. (2009). The comparisons of data mining techniques for the predictive accuracy of probability of default of credit card clients. *Expert Systems with Applications*, 36(2), 2473–2480.
-- Material de la materia: clases 1 a 5 y prácticas (en particular, la práctica 5 de MLOps con MLflow).
